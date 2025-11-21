@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { connectTicks, connectChat } from './RealtimeClient'
 
 const API = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 
@@ -67,9 +68,22 @@ export default function Dashboard({ token }) {
   useEffect(() => {
     fetchPlayers()
     fetchChat()
-    const t1 = setInterval(() => fetchPlayers(q), 10000)
-    const t2 = setInterval(fetchChat, 5000)
-    return () => { clearInterval(t1); clearInterval(t2) }
+
+    // WebSocket live updates
+    const wsTicks = connectTicks(API, (msg) => {
+      const { player_id, price } = msg
+      setPlayers((prev) => prev.map(p => p.id === player_id ? { ...p, price } : p))
+      setSelected((sel) => sel && sel.id === player_id ? { ...sel, price } : sel)
+    })
+    const wsChat = connectChat(API, (msg) => {
+      if (msg?.message) setChat((prev) => [...prev, { id: msg.id || Math.random().toString(36), message: msg.message }])
+    })
+
+    // Fallback polling (light)
+    const t1 = setInterval(() => fetchPlayers(q), 30000)
+
+    return () => { wsTicks.close(); wsChat.close(); clearInterval(t1) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -81,7 +95,7 @@ export default function Dashboard({ token }) {
     if (!chatText.trim()) return
     await fetch(`${API}/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify({ message: chatText }) })
     setChatText('')
-    fetchChat()
+    // WS will deliver to everyone (including sender). No manual fetch needed.
   }
 
   async function trade(side, player, quantity) {
@@ -92,7 +106,7 @@ export default function Dashboard({ token }) {
       return
     }
     await fetchPortfolio()
-    await fetchPlayers(q)
+    // Price updates will continue via WS
     alert(`Order confirmed: ${side} ${quantity} ${player.name} @ $${data.price}`)
   }
 
@@ -128,7 +142,7 @@ export default function Dashboard({ token }) {
     if (!res.ok) return alert(data?.detail || 'Failed to add tick')
     setTickPrice('')
     setTickEvent('')
-    await fetchPlayers(q)
+    // WS will push the new price immediately
     alert('Price tick added')
   }
 
