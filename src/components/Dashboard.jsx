@@ -32,10 +32,18 @@ export default function Dashboard({ token }) {
   const [chat, setChat] = useState([])
   const [chatText, setChatText] = useState('')
 
+  // Admin state
+  const [q, setQ] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [newPlayer, setNewPlayer] = useState({ name: '', team: '', nationality: '', position: '', cwc_status: '', image_url: '' })
+  const [tickPrice, setTickPrice] = useState('')
+  const [tickEvent, setTickEvent] = useState('')
+  const [depositAmt, setDepositAmt] = useState('100')
+
   const headers = useAuthHeaders(token)
 
-  async function fetchPlayers() {
-    const res = await fetch(`${API}/players`)
+  async function fetchPlayers(search) {
+    const res = await fetch(`${API}/players${search ? `?q=${encodeURIComponent(search)}` : ''}`)
     const data = await res.json()
     // Attach latest price per player
     const withPrice = await Promise.all(data.map(async (p) => {
@@ -59,7 +67,7 @@ export default function Dashboard({ token }) {
   useEffect(() => {
     fetchPlayers()
     fetchChat()
-    const t1 = setInterval(fetchPlayers, 10000)
+    const t1 = setInterval(() => fetchPlayers(q), 10000)
     const t2 = setInterval(fetchChat, 5000)
     return () => { clearInterval(t1); clearInterval(t2) }
   }, [])
@@ -84,13 +92,65 @@ export default function Dashboard({ token }) {
       return
     }
     await fetchPortfolio()
-    await fetchPlayers()
+    await fetchPlayers(q)
     alert(`Order confirmed: ${side} ${quantity} ${player.name} @ $${data.price}`)
+  }
+
+  // Admin helpers
+  async function handleCreatePlayer(e) {
+    e.preventDefault()
+    if (!token) return alert('Log in first')
+    if (!newPlayer.name || !newPlayer.team) return alert('Name and team are required')
+    setCreating(true)
+    try {
+      const res = await fetch(`${API}/players`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(newPlayer) })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.detail || 'Failed to create player')
+      setNewPlayer({ name: '', team: '', nationality: '', position: '', cwc_status: '', image_url: '' })
+      await fetchPlayers(q)
+      alert('Player created')
+    } catch (err) {
+      alert(err.message)
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  async function handleAddTick(e) {
+    e.preventDefault()
+    if (!token) return alert('Log in first')
+    const pid = selected?.id
+    if (!pid) return alert('Select a player first')
+    const price = parseFloat(tickPrice)
+    if (!price || price <= 0) return alert('Enter a valid price')
+    const res = await fetch(`${API}/players/${pid}/tick`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify({ price, event: tickEvent || undefined }) })
+    const data = await res.json()
+    if (!res.ok) return alert(data?.detail || 'Failed to add tick')
+    setTickPrice('')
+    setTickEvent('')
+    await fetchPlayers(q)
+    alert('Price tick added')
+  }
+
+  async function quickDeposit(e) {
+    e.preventDefault()
+    if (!token) return alert('Log in first')
+    const amt = parseFloat(depositAmt)
+    if (!amt || amt <= 0) return alert('Enter a valid amount')
+    const res = await fetch(`${API}/wallet/deposit`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify({ amount: amt, provider: 'demo' }) })
+    const data = await res.json()
+    if (!res.ok) return alert(data?.detail || 'Deposit failed')
+    await fetchPortfolio()
+    alert(`Deposited $${amt.toFixed(2)}`)
   }
 
   function Market() {
     return (
       <div className="space-y-3">
+        <div className="flex items-center gap-2 mb-2">
+          <input value={q} onChange={(e)=>{ setQ(e.target.value); }} onKeyDown={(e)=>{ if (e.key==='Enter') fetchPlayers(q) }} placeholder="Search players" className="flex-1 bg-slate-900/60 border border-slate-700 rounded p-2 text-white" />
+          <button onClick={()=>fetchPlayers(q)} className="bg-slate-700 hover:bg-slate-600 text-white rounded px-3 py-2">Search</button>
+        </div>
         {players.map(p => <PlayerRow key={p.id} p={p} onSelect={setSelected} />)}
       </div>
     )
@@ -128,11 +188,54 @@ export default function Dashboard({ token }) {
     )
   }
 
+  function Admin() {
+    if (!token) return <p className="text-blue-200">Log in to use admin tools.</p>
+    return (
+      <div className="space-y-6">
+        <div className="bg-slate-800/50 border border-blue-500/20 rounded-2xl p-4">
+          <h4 className="text-white font-semibold mb-3">Create Player</h4>
+          <form onSubmit={handleCreatePlayer} className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <input className="bg-slate-900/60 border border-slate-700 rounded p-2 text-white" placeholder="Name" value={newPlayer.name} onChange={(e)=>setNewPlayer(v=>({ ...v, name: e.target.value }))} />
+            <input className="bg-slate-900/60 border border-slate-700 rounded p-2 text-white" placeholder="Team" value={newPlayer.team} onChange={(e)=>setNewPlayer(v=>({ ...v, team: e.target.value }))} />
+            <input className="bg-slate-900/60 border border-slate-700 rounded p-2 text-white" placeholder="Nationality" value={newPlayer.nationality} onChange={(e)=>setNewPlayer(v=>({ ...v, nationality: e.target.value }))} />
+            <input className="bg-slate-900/60 border border-slate-700 rounded p-2 text-white" placeholder="Position" value={newPlayer.position} onChange={(e)=>setNewPlayer(v=>({ ...v, position: e.target.value }))} />
+            <input className="bg-slate-900/60 border border-slate-700 rounded p-2 text-white" placeholder="Status (current/upcoming/etc)" value={newPlayer.cwc_status} onChange={(e)=>setNewPlayer(v=>({ ...v, cwc_status: e.target.value }))} />
+            <input className="bg-slate-900/60 border border-slate-700 rounded p-2 text-white" placeholder="Image URL" value={newPlayer.image_url} onChange={(e)=>setNewPlayer(v=>({ ...v, image_url: e.target.value }))} />
+            <div className="md:col-span-3 flex justify-end">
+              <button disabled={creating} className="bg-green-600 hover:bg-green-500 text-white rounded px-4 py-2 disabled:opacity-60">{creating ? 'Creating...' : 'Create'}</button>
+            </div>
+          </form>
+        </div>
+
+        <div className="bg-slate-800/50 border border-blue-500/20 rounded-2xl p-4">
+          <h4 className="text-white font-semibold mb-3">Add Price Tick</h4>
+          <form onSubmit={handleAddTick} className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <input disabled className="bg-slate-900/60 border border-slate-700 rounded p-2 text-white md:col-span-2" value={selected?.name ? `${selected.name} (${selected.team})` : 'Select a player from Market list'} />
+            <input className="bg-slate-900/60 border border-slate-700 rounded p-2 text-white" placeholder="Price" value={tickPrice} onChange={(e)=>setTickPrice(e.target.value)} />
+            <input className="bg-slate-900/60 border border-slate-700 rounded p-2 text-white" placeholder="Event (optional)" value={tickEvent} onChange={(e)=>setTickEvent(e.target.value)} />
+            <div className="md:col-span-4 flex justify-end">
+              <button className="bg-blue-600 hover:bg-blue-500 text-white rounded px-4 py-2">Add Tick</button>
+            </div>
+          </form>
+        </div>
+
+        <div className="bg-slate-800/50 border border-blue-500/20 rounded-2xl p-4">
+          <h4 className="text-white font-semibold mb-3">Quick Deposit</h4>
+          <form onSubmit={quickDeposit} className="flex items-center gap-3">
+            <input className="bg-slate-900/60 border border-slate-700 rounded p-2 text-white" placeholder="Amount" value={depositAmt} onChange={(e)=>setDepositAmt(e.target.value)} />
+            <button className="bg-purple-600 hover:bg-purple-500 text-white rounded px-4 py-2">Deposit</button>
+          </form>
+          <p className="text-blue-300 text-xs mt-2">Simulates funding your wallet for demo purposes.</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <div className="lg:col-span-2 space-y-4">
         <div className="flex gap-2">
-          {['market','portfolio','chat'].map(t => (
+          {['market','portfolio','chat', ...(token ? ['admin'] : [])].map(t => (
             <button key={t} onClick={()=>setTab(t)} className={`px-3 py-1 rounded ${tab===t ? 'bg-blue-600 text-white' : 'bg-slate-800/60 text-blue-200'}`}>{t[0].toUpperCase()+t.slice(1)}</button>
           ))}
         </div>
@@ -140,6 +243,7 @@ export default function Dashboard({ token }) {
           {tab === 'market' && <Market />}
           {tab === 'portfolio' && <PortfolioView />}
           {tab === 'chat' && <Chat />}
+          {tab === 'admin' && <Admin />}
         </div>
       </div>
 
